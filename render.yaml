@@ -1,0 +1,41 @@
+# Render Blueprint for Upheld, Milestone 1.
+# Creates a private Postgres database and one web service.
+# Migrations and the upheld_app role setup run at service start.
+
+databases:
+  - name: upheld-db
+    databaseName: upheld
+    user: upheld_owner
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+    # Empty list: no connections from the public internet. Only services on
+    # Render's private network can reach the database.
+    ipAllowList: []
+
+services:
+  - type: web
+    name: upheld-web
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:render
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_OWNER_URL
+        fromDatabase:
+          name: upheld-db
+          property: connectionString
+      - key: APP_DB_PASSWORD
+        generateValue: true
+      - key: FIELD_ENCRYPTION_KEY
+        generateValue: true
+      - key: APP_BASE_URL
+        sync: false
+      - key: EMAIL_PROVIDER
+        value: disabled
+      - key: SESSION_IDLE_MINUTES
+        value: "30"
+      - key: SESSION_MAX_HOURS
+        value: "12"

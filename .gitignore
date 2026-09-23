@@ -1,0 +1,13 @@
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Secrets. Never commit these.
+.env
+.env.test
+.env*.local
+
+.DS_Store
+filetree.txt

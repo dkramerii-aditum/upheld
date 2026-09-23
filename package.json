@@ -1,0 +1,47 @@
+{
+  "name": "upheld",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "start:render": "node scripts/db-app-role.mjs && prisma migrate deploy && next start",
+    "setup:env": "node scripts/setup-env.mjs",
+    "db:create-local": "node scripts/db-create-local.mjs",
+    "db:app-role": "node scripts/db-app-role.mjs",
+    "db:init-migration": "node scripts/generate-init-migration.mjs",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "tsx scripts/seed.ts",
+    "isolation:report": "tsx scripts/isolation-report.ts",
+    "test:db:prepare": "node scripts/test-db-prepare.mjs",
+    "test": "node scripts/test-db-prepare.mjs && vitest run",
+    "test:unit": "vitest run tests/unit",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.10.0",
+    "dotenv": "^16.4.5",
+    "next": "^15.5.9",
+    "otplib": "12.0.1",
+    "pg": "^8.13.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "prisma": "^6.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0"
+  }
+}

@@ -1,0 +1,700 @@
+// Upheld data model, Milestone 1.
+//
+// Rules that apply to every model below:
+//   1. Every table except churches carries church_id.
+//   2. Row level security (see prisma/migrations/*_rls_and_integrity) limits
+//      every database session to one church.
+//   3. Any column ending in _ciphertext holds field level encrypted data.
+//      Plain text member content never lands in a normal column.
+//
+// Core tables built in M1: churches, staff_users, audit_log, plus the staff
+// sign in tables. Every other table is a stub: present, church scoped, and
+// protected, with fields finalized in the milestone that uses it.
+//
+// scheduled_jobs from section 5 is not modeled here. pg-boss creates and owns
+// its own schema in M6. Job payloads must carry ids only, never content.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Owner connection. Used only by the Prisma CLI (migrations) and owner
+  // scripts. The running app never uses it; lib/db builds a separate
+  // connection as the restricted upheld_app role.
+  url      = env("DATABASE_OWNER_URL")
+}
+
+// ---------------------------------------------------------------- enums
+
+enum ChurchStatus {
+  onboarding
+  pilot
+  active
+  cancelling
+  closed
+
+  @@map("church_status")
+}
+
+enum PlanTier {
+  tier_under_100
+  tier_100_249
+  tier_250_499
+  tier_500_999
+  tier_1000_plus
+
+  @@map("plan_tier")
+}
+
+enum BibleTranslation {
+  web
+  nlt
+  niv
+  other_requested
+
+  @@map("bible_translation")
+}
+
+enum StaffRole {
+  senior_pastor
+  care_pastor
+  care_staff
+  insights_only
+  founder_support
+
+  @@map("staff_role")
+}
+
+enum AuditActorType {
+  staff
+  founder_support
+  system
+
+  @@map("audit_actor_type")
+}
+
+enum MemberStatus {
+  enrolling
+  active
+  quiet
+  monthly
+  paused
+  private
+  opted_out
+
+  @@map("member_status")
+}
+
+enum StandingPermission {
+  yes
+  ask
+  no
+
+  @@map("standing_permission")
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+
+  @@map("message_direction")
+}
+
+enum MessageType {
+  check_in
+  devotional
+  follow_up
+  recap
+  reply
+  command
+  safety
+  system
+
+  @@map("message_type")
+}
+
+enum DeliveryStatus {
+  received
+  queued
+  sent
+  delivered
+  failed
+
+  @@map("delivery_status")
+}
+
+enum PrayerStatus {
+  open
+  answered
+  closed
+
+  @@map("prayer_status")
+}
+
+enum CareRequestStatus {
+  open
+  snoozed
+  closed
+
+  @@map("care_request_status")
+}
+
+enum CareConsentBasis {
+  care_request
+  standing_permission
+  standing_permission_asked
+
+  @@map("care_consent_basis")
+}
+
+enum NudgeStatus {
+  open
+  closed
+
+  @@map("nudge_status")
+}
+
+enum SafetyCategory {
+  self_harm
+  abuse
+  domestic_violence
+  threat
+  severe_distress
+  possible_minor
+
+  @@map("safety_category")
+}
+
+enum DetectionSource {
+  phrase_list
+  classifier
+  both
+  staff_report
+
+  @@map("detection_source")
+}
+
+enum SafetyFlagReview {
+  pending
+  confirmed
+  false_positive
+
+  @@map("safety_flag_review")
+}
+
+enum EscalationStatus {
+  open
+  acknowledged
+  resolved
+
+  @@map("escalation_status")
+}
+
+enum EscalationStepType {
+  member_response
+  call
+  text
+  timeout
+  acknowledged
+  final_member_message
+  critical_incident
+  senior_pastor_email
+
+  @@map("escalation_step_type")
+}
+
+enum ContentVerdict {
+  approved
+  flagged
+  edited
+
+  @@map("content_verdict")
+}
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  cancelled
+
+  @@map("subscription_status")
+}
+
+// ---------------------------------------------------------------- core (M1)
+
+model Church {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String
+  keyword          String?          @unique
+  phoneNumber      String?          @unique @map("phone_number")
+  zip              String?
+  timezone         String           @default("America/New_York")
+  tradition        String?
+  translation      BibleTranslation @default(web)
+  tone             String?
+  statementOfFaith String?          @map("statement_of_faith")
+  sermonSeries     String?          @map("sermon_series")
+  seniorPastorName String?          @map("senior_pastor_name")
+  planTier         PlanTier?        @map("plan_tier")
+  status           ChurchStatus     @default(onboarding)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  staffUsers        StaffUser[]
+  loginTokens       StaffLoginToken[]
+  sessions          StaffSession[]
+  supportGrants     SupportAccessGrant[]
+  auditEntries      AuditLog[]
+  members           Member[]
+  consents          Consent[]
+  consentEvents     ConsentEvent[]
+  messages          Message[]
+  lifeEvents        LifeEvent[]
+  prayerItems       PrayerItem[]
+  careRequests      CareRequest[]
+  checkinNudges     CheckinNudge[]
+  safetyFlags       SafetyFlag[]
+  escalations       Escalation[]
+  escalationSteps   EscalationStep[]
+  reportingSettings ReportingSettings?
+  readiness         Readiness?
+  contentReviews    ContentReview[]
+  themeCounts       ThemeCount[]
+  enrollmentSources EnrollmentSource[]
+  subscriptions     Subscription[]
+
+  @@map("churches")
+}
+
+model StaffUser {
+  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId                  String    @map("church_id") @db.Uuid
+  name                      String
+  // Stored lower case. Unique within a church; the same person may be staff
+  // at more than one church, as separate rows.
+  email                     String
+  role                      StaffRole
+  // The onboarding point of contact. Administers the church account
+  // (decision log). Never true for founder_support (database check).
+  isAccountAdmin            Boolean   @default(false) @map("is_account_admin")
+  twoFactorEnabled          Boolean   @default(false) @map("two_factor_enabled")
+  twoFactorSecretCiphertext String?   @map("two_factor_secret_ciphertext")
+  // Last accepted one time code step, to block code replay.
+  twoFactorLastStep         Int?      @map("two_factor_last_step")
+  lastLoginAt               DateTime? @map("last_login_at") @db.Timestamptz(6)
+  active                    Boolean   @default(true)
+  createdAt                 DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  church                Church               @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  loginTokens           StaffLoginToken[]
+  sessions              StaffSession[]
+  supportGrantsGiven    SupportAccessGrant[] @relation("GrantGrantedBy")
+  supportGrantsReceived SupportAccessGrant[] @relation("GrantSupportStaff")
+  auditEntries          AuditLog[]
+  assignedCareRequests  CareRequest[]
+  resolvedEscalations   Escalation[]
+  escalationSteps       EscalationStep[]
+  contentReviews        ContentReview[]
+
+  @@unique([churchId, email])
+  @@map("staff_users")
+}
+
+model StaffLoginToken {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId    String    @map("church_id") @db.Uuid
+  staffUserId String    @map("staff_user_id") @db.Uuid
+  // SHA-256 of the token. The raw token exists only in the email.
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church    Church    @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  staffUser StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+
+  @@index([staffUserId, createdAt])
+  @@map("staff_login_tokens")
+}
+
+model StaffSession {
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId                String    @map("church_id") @db.Uuid
+  staffUserId             String    @map("staff_user_id") @db.Uuid
+  // SHA-256 of the cookie value.
+  tokenHash               String    @unique @map("token_hash")
+  twoFactorVerifiedAt     DateTime? @map("two_factor_verified_at") @db.Timestamptz(6)
+  failedTwoFactorAttempts Int       @default(0) @map("failed_two_factor_attempts")
+  lastSeenAt              DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  expiresAt               DateTime  @map("expires_at") @db.Timestamptz(6)
+  endedAt                 DateTime? @map("ended_at") @db.Timestamptz(6)
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church    Church    @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  staffUser StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+
+  @@map("staff_sessions")
+}
+
+// Founder support access requires the church's explicit grant and expires
+// after 72 hours (spec section 9). The grant is to a founder_support staff
+// row inside this church.
+model SupportAccessGrant {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId           String    @map("church_id") @db.Uuid
+  grantedByStaffId   String    @map("granted_by_staff_id") @db.Uuid
+  supportStaffUserId String    @map("support_staff_user_id") @db.Uuid
+  grantedAt          DateTime  @default(now()) @map("granted_at") @db.Timestamptz(6)
+  expiresAt          DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt          DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  church       Church    @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  grantedBy    StaffUser @relation("GrantGrantedBy", fields: [grantedByStaffId], references: [id], onDelete: Restrict)
+  supportStaff StaffUser @relation("GrantSupportStaff", fields: [supportStaffUserId], references: [id], onDelete: Restrict)
+
+  @@map("support_access_grants")
+}
+
+// Append only (database trigger blocks UPDATE, DELETE, TRUNCATE for every
+// role). Never stores message content: detail is a short code, enforced by
+// lib/audit and by a database check.
+model AuditLog {
+  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId     String         @map("church_id") @db.Uuid
+  actorType    AuditActorType @map("actor_type")
+  actorStaffId String?        @map("actor_staff_id") @db.Uuid
+  action       String
+  targetTable  String?        @map("target_table")
+  targetId     String?        @map("target_id") @db.Uuid
+  detail       String?
+  ipAddress    String?        @map("ip_address") @db.Inet
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church     Church     @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  actorStaff StaffUser? @relation(fields: [actorStaffId], references: [id], onDelete: Restrict)
+
+  @@index([churchId, createdAt])
+  @@map("audit_log")
+}
+
+// ---------------------------------------------------------------- stubs
+
+// M2 and M4. phone_hash is a keyed blind index so inbound numbers can be
+// matched without decrypting every row.
+model Member {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId        String       @map("church_id") @db.Uuid
+  phoneCiphertext String       @map("phone_ciphertext")
+  phoneHash       String       @map("phone_hash")
+  preferredName   String?      @map("preferred_name")
+  checkinWindow   String?      @map("checkin_window")
+  status          MemberStatus @default(enrolling)
+  enrollmentState String?      @map("enrollment_state")
+  enrollmentSource String?     @map("enrollment_source")
+  smallGroup      String?      @map("small_group")
+  ageConfirmedAt  DateTime?    @map("age_confirmed_at") @db.Timestamptz(6)
+  safetyHold      Boolean      @default(false) @map("safety_hold")
+  dvSuppressed    Boolean      @default(false) @map("dv_suppressed")
+  enrolledAt      DateTime?    @map("enrolled_at") @db.Timestamptz(6)
+  lastInboundAt   DateTime?    @map("last_inbound_at") @db.Timestamptz(6)
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  church        Church         @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  consent       Consent?
+  consentEvents ConsentEvent[]
+  messages      Message[]
+  lifeEvents    LifeEvent[]
+  prayerItems   PrayerItem[]
+  careRequests  CareRequest[]
+  checkinNudges CheckinNudge[]
+  safetyFlags   SafetyFlag[]
+
+  @@unique([churchId, phoneHash])
+  @@map("members")
+}
+
+// M4. Care requests are always on (database check). The safety exception has
+// no column because it cannot be turned off. Unanswered questions record NO.
+model Consent {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId             String             @map("church_id") @db.Uuid
+  memberId             String             @unique @map("member_id") @db.Uuid
+  careRequests         Boolean            @default(true) @map("care_requests")
+  standingPermission   StandingPermission @default(no) @map("standing_permission")
+  quietAfterHardship   Boolean            @default(false) @map("quiet_after_hardship")
+  eventInvitations     Boolean            @default(false) @map("event_invitations")
+  recordedAt           DateTime           @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  nextReconfirmationAt DateTime?          @map("next_reconfirmation_at") @db.Timestamptz(6)
+
+  church Church @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Restrict)
+
+  @@map("consents")
+}
+
+// M4. Append only.
+model ConsentEvent {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId  String   @map("church_id") @db.Uuid
+  memberId  String   @map("member_id") @db.Uuid
+  field     String
+  oldValue  String?  @map("old_value")
+  newValue  String   @map("new_value")
+  messageId String?  @map("message_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church  Church   @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  member  Member   @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  message Message? @relation(fields: [messageId], references: [id], onDelete: Restrict)
+
+  @@map("consent_events")
+}
+
+// M2.
+model Message {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId       String           @map("church_id") @db.Uuid
+  memberId       String           @map("member_id") @db.Uuid
+  direction      MessageDirection
+  type           MessageType
+  bodyCiphertext String?          @map("body_ciphertext")
+  twilioSid      String?          @unique @map("twilio_sid")
+  deliveryStatus DeliveryStatus   @default(queued) @map("delivery_status")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  sentAt         DateTime?        @map("sent_at") @db.Timestamptz(6)
+  deliveredAt    DateTime?        @map("delivered_at") @db.Timestamptz(6)
+
+  church         Church          @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  member         Member          @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  consentEvents  ConsentEvent[]
+  lifeEvents     LifeEvent[]
+  safetyFlags    SafetyFlag[]
+  contentReviews ContentReview[]
+
+  @@index([memberId, createdAt])
+  @@map("messages")
+}
+
+// M5.
+model LifeEvent {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId          String    @map("church_id") @db.Uuid
+  memberId          String    @map("member_id") @db.Uuid
+  summaryCiphertext String    @map("summary_ciphertext")
+  category          String
+  eventDate         DateTime? @map("event_date") @db.Timestamptz(6)
+  heavy             Boolean   @default(false)
+  sourceMessageId   String?   @map("source_message_id") @db.Uuid
+  followUpStatus    String?   @map("follow_up_status")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church        Church   @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  member        Member   @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  sourceMessage Message? @relation(fields: [sourceMessageId], references: [id], onDelete: SetNull)
+
+  @@map("life_events")
+}
+
+// M5.
+model PrayerItem {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId          String       @map("church_id") @db.Uuid
+  memberId          String       @map("member_id") @db.Uuid
+  summaryCiphertext String       @map("summary_ciphertext")
+  status            PrayerStatus @default(open)
+  openedAt          DateTime     @default(now()) @map("opened_at") @db.Timestamptz(6)
+  answeredAt        DateTime?    @map("answered_at") @db.Timestamptz(6)
+
+  church Church @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Restrict)
+
+  @@map("prayer_items")
+}
+
+// M4 and M7.
+model CareRequest {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId             String            @map("church_id") @db.Uuid
+  memberId             String            @map("member_id") @db.Uuid
+  sharedTextCiphertext String?           @map("shared_text_ciphertext")
+  consentBasis         CareConsentBasis  @map("consent_basis")
+  status               CareRequestStatus @default(open)
+  assignedStaffId      String?           @map("assigned_staff_id") @db.Uuid
+  snoozedUntil         DateTime?         @map("snoozed_until") @db.Timestamptz(6)
+  outcomeNote          String?           @map("outcome_note")
+  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  closedAt             DateTime?         @map("closed_at") @db.Timestamptz(6)
+
+  church        Church     @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  member        Member     @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  assignedStaff StaffUser? @relation(fields: [assignedStaffId], references: [id], onDelete: Restrict)
+
+  @@map("care_requests")
+}
+
+// M6. Content free by design: a reason code only, never text.
+model CheckinNudge {
+  id         String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId   String      @map("church_id") @db.Uuid
+  memberId   String      @map("member_id") @db.Uuid
+  reasonCode String      @map("reason_code")
+  status     NudgeStatus @default(open)
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church Church @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Restrict)
+
+  @@map("checkin_nudges")
+}
+
+// M3.
+model SafetyFlag {
+  id                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId            String           @map("church_id") @db.Uuid
+  memberId            String           @map("member_id") @db.Uuid
+  category            SafetyCategory
+  detectionSource     DetectionSource  @map("detection_source")
+  triggeringMessageId String?          @map("triggering_message_id") @db.Uuid
+  review              SafetyFlagReview @default(pending)
+  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church            Church       @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  member            Member       @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  triggeringMessage Message?     @relation(fields: [triggeringMessageId], references: [id], onDelete: Restrict)
+  escalations       Escalation[]
+
+  @@map("safety_flags")
+}
+
+// M3.
+model Escalation {
+  id                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId          String           @map("church_id") @db.Uuid
+  safetyFlagId      String           @map("safety_flag_id") @db.Uuid
+  status            EscalationStatus @default(open)
+  outcome           String?
+  resolvedByStaffId String?          @map("resolved_by_staff_id") @db.Uuid
+  messagesPaused    Boolean          @default(true) @map("messages_paused")
+  criticalIncident  Boolean          @default(false) @map("critical_incident")
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  resolvedAt        DateTime?        @map("resolved_at") @db.Timestamptz(6)
+
+  church     Church           @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  safetyFlag SafetyFlag       @relation(fields: [safetyFlagId], references: [id], onDelete: Restrict)
+  resolvedBy StaffUser?       @relation(fields: [resolvedByStaffId], references: [id], onDelete: Restrict)
+  steps      EscalationStep[]
+
+  @@map("escalations")
+}
+
+// M3. Append only.
+model EscalationStep {
+  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId      String             @map("church_id") @db.Uuid
+  escalationId  String             @map("escalation_id") @db.Uuid
+  stepType      EscalationStepType @map("step_type")
+  targetStaffId String?            @map("target_staff_id") @db.Uuid
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church      Church     @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  escalation  Escalation @relation(fields: [escalationId], references: [id], onDelete: Restrict)
+  targetStaff StaffUser? @relation(fields: [targetStaffId], references: [id], onDelete: Restrict)
+
+  @@map("escalation_steps")
+}
+
+// M8.
+model ReportingSettings {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId           String   @unique @map("church_id") @db.Uuid
+  state              String?
+  designatedReporter String?  @map("designated_reporter")
+  counselContact     String?  @map("counsel_contact")
+  preservationRules  String?  @map("preservation_rules")
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  church Church @relation(fields: [churchId], references: [id], onDelete: Restrict)
+
+  @@map("reporting_settings")
+}
+
+// M8.
+model Readiness {
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId               String    @unique @map("church_id") @db.Uuid
+  careContactTrainedAt   DateTime? @map("care_contact_trained_at") @db.Timestamptz(6)
+  backupTrainedAt        DateTime? @map("backup_trained_at") @db.Timestamptz(6)
+  protocolVersionSigned  String?   @map("protocol_version_signed")
+  lastDrillPassedAt      DateTime? @map("last_drill_passed_at") @db.Timestamptz(6)
+  updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  church Church @relation(fields: [churchId], references: [id], onDelete: Restrict)
+
+  @@map("readiness")
+}
+
+// M8.
+model ContentReview {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId        String         @map("church_id") @db.Uuid
+  messageId       String?        @map("message_id") @db.Uuid
+  reviewerStaffId String?        @map("reviewer_staff_id") @db.Uuid
+  verdict         ContentVerdict
+  note            String?
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church   Church     @relation(fields: [churchId], references: [id], onDelete: Restrict)
+  message  Message?   @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  reviewer StaffUser? @relation(fields: [reviewerStaffId], references: [id], onDelete: Restrict)
+
+  @@map("content_reviews")
+}
+
+// M8. Rows below the anonymity threshold of five are rejected by a database
+// check, so they can never be written.
+model ThemeCount {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId  String   @map("church_id") @db.Uuid
+  month     DateTime @db.Date
+  theme     String
+  count     Int
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church Church @relation(fields: [churchId], references: [id], onDelete: Restrict)
+
+  @@unique([churchId, month, theme])
+  @@map("theme_counts")
+}
+
+// M8.
+model EnrollmentSource {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId  String   @map("church_id") @db.Uuid
+  label     String
+  count     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church Church @relation(fields: [churchId], references: [id], onDelete: Restrict)
+
+  @@unique([churchId, label])
+  @@map("enrollment_sources")
+}
+
+// Reserved for billing (deferred).
+model Subscription {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  churchId           String             @map("church_id") @db.Uuid
+  tier               PlanTier
+  status             SubscriptionStatus
+  currentPeriodStart DateTime?          @map("current_period_start") @db.Timestamptz(6)
+  currentPeriodEnd   DateTime?          @map("current_period_end") @db.Timestamptz(6)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  church Church @relation(fields: [churchId], references: [id], onDelete: Restrict)
+
+  @@map("subscriptions")
+}

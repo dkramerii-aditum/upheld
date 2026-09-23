@@ -1,7 +1,7 @@
 # Upheld Handoff Note: Milestone 1, Foundation
 
 Date: September 22, 2026
-Status: Verified locally on September 22, 2026 on Dennis's Mac (Node 22.20, Postgres 18.6). npm test: 5 files, 41 tests passed. npm run typecheck: clean. npm run isolation:report: all PASS. Browser check: the same email signed in to Test Church North (senior pastor, two factor enforced) saw 1 church, 2 staff, 2 members; signed in to Test Church South (insights only, no two factor) saw 1 church, 2 staff, 3 members. Render deployment: see item 6.
+Status: Verified locally on September 22, 2026 on Dennis's Mac (Node 22.20, Postgres 18.6). npm test: 5 files, 41 tests passed. npm run typecheck: clean. npm run isolation:report: all PASS. Browser check: the same email signed in to Test Church North (senior pastor, two factor enforced) saw 1 church, 2 staff, 2 members; signed in to Test Church South (insights only, no two factor) saw 1 church, 2 staff, 3 members. Render: deployed by Blueprint from commit 847aa0c to https://upheld-web.onrender.com (web service on the free plan, Postgres Basic 256 MB, no public database access). The start command created upheld_app and applied both migrations; /api/health returns ok with row level security enforced.
 
 Done-when test (Technical Specification section 13): two test churches exist and cannot see each other's data.
 
@@ -129,7 +129,9 @@ Render: start command npm run start:render runs db-app-role, prisma migrate depl
 * The app cannot create churches yet; M8 onboarding needs a dedicated database function.
 * Staff phone numbers for escalation calls and the care team contact order are not in the schema yet (M3).
 * Consent records must be kept five years even after DELETE (Safety and Legal Review, C). The consent and member foreign keys use Restrict; M4 must design DELETE around this.
-* Render's database owner must be allowed to create roles. If npm run start:render fails at db-app-role, stop and decide with Dennis.
+* Render's database owner was able to create upheld_app on first deploy. If a later Render change blocks role creation, npm run start:render will fail at db-app-role; stop and decide with Dennis rather than connecting the app as the owner.
+* The Render web service is on the free plan and sleeps when idle (about 50 seconds to wake). Move to a paid instance before Twilio webhooks go live in M2 or M3, since Twilio will not wait for a cold start.
+* No churches or staff exist on Render; seed data is local only. Production staff sign in needs Resend (item above) and M8 onboarding.
 * The Render generated FIELD_ENCRYPTION_KEY must be copied into a password manager.
 * No ESLint yet. Next.js may add small changes to tsconfig.json and next-env.d.ts on first run.
 
